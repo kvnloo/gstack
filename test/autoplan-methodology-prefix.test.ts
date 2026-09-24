@@ -73,7 +73,7 @@ describe('autoplan methodology accepts supported installed skill names', () => {
     const f = fixture(skillName(phase), true);
     const original = readFileSync(f.skillFile);
     for (const prefixed of [true, false]) {
-      const result = spawnSync('bash', [join(import.meta.dir, '../bin/gstack-patch-names'), f.dir, String(prefixed)], { encoding: 'utf8' });
+      const result = spawnSync('bash', [join(import.meta.dir, '../bin/gstack-patch-names'), f.dir, String(prefixed)], { encoding: 'utf8', timeout: 30_000 });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       expect(readFileSync(f.skillFile, 'utf8')).toContain(`name: ${prefixed ? 'gstack-' : ''}${skillName(phase)}\n`);
