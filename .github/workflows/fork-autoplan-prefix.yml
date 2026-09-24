@@ -1,0 +1,140 @@
+name: Fork autoplan prefix validation
+
+# Investigation infrastructure only; do not include this workflow or .context
+# patch storage in an upstream production PR. The candidate is applied only
+# inside each disposable checkout. No provider keys or write token are used.
+on:
+  push:
+    branches: [investigate/autoplan-prefix-2921-20260924]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-autoplan-prefix-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NO_COLOR: '1'
+
+jobs:
+  focused:
+    if: github.repository == 'kvnloo/gstack'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.0
+      - name: Record and verify the baseline
+        run: |
+          mkdir -p validation
+          git rev-parse HEAD > validation/checkout-sha.txt
+          bun --version > validation/bun-version.txt
+          test "$(git hash-object bin/gstack-autoplan-snapshot.ts)" = 7a0f3344f6a9c7899be6a8394996668a442d6a41
+          test "$(git hash-object bin/gstack-patch-names)" = bef02aae4c0b3ccce7b1983a977c475c1a629186
+          git diff --check
+      - name: Install pinned dependencies
+        run: bun install --frozen-lockfile
+      - name: Preserve the expected native regression failures
+        run: |
+          set +e
+          bun test test/autoplan-methodology-prefix.test.ts 2>&1 | tee validation/before.log
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > validation/before-exit.txt
+          test "$result" -eq 1
+          grep -Eq '^[[:space:]]*20 pass[[:space:]]*$' validation/before.log
+          grep -Eq '^[[:space:]]*28 fail[[:space:]]*$' validation/before.log
+          if grep -Eq '^[[:space:]]*[1-9][0-9]* (skip|todo)|errors? between tests' validation/before.log; then exit 1; fi
+      - name: Apply only the pinned production candidate
+        run: |
+          git apply --check .context/autoplan-prefix/source-only.patch
+          git apply .context/autoplan-prefix/source-only.patch
+          git diff --check
+          git diff -- bin/gstack-autoplan-snapshot.ts > validation/candidate.patch
+          git hash-object bin/gstack-autoplan-snapshot.ts > validation/candidate-blob.txt
+          cp bin/gstack-autoplan-snapshot.ts validation/candidate-source.ts
+      - name: Require the identical native suite to pass without skips
+        run: |
+          bun test test/autoplan-methodology-prefix.test.ts 2>&1 | tee validation/after.log
+          grep -Eq '^[[:space:]]*48 pass[[:space:]]*$' validation/after.log
+          grep -Eq '^[[:space:]]*0 fail[[:space:]]*$' validation/after.log
+          if grep -Eq '^[[:space:]]*[1-9][0-9]* (skip|todo)|errors? between tests' validation/after.log; then exit 1; fi
+      - name: Run existing affected native tests
+        run: |
+          git config --global user.name 'Fork Validation'
+          git config --global user.email 'fork-validation@gstack.test'
+          git config --global init.defaultBranch main
+          bun test test/autoplan-snapshot.test.ts test/autoplan-init.test.ts test/autoplan-amend-input.test.ts 2>&1 | tee validation/adjacent.log
+      - name: Upload complete focused evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: autoplan-prefix-focused
+          path: validation/
+          if-no-files-found: error
+
+  full-free:
+    needs: focused
+    if: github.repository == 'kvnloo/gstack'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GSTACK_FREE_JOBS: '2'
+      GSTACK_EXPECT_BINARIES: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.0
+      - name: Apply the same pinned production candidate
+        run: |
+          mkdir -p validation
+          git rev-parse HEAD > validation/checkout-sha.txt
+          test "$(git hash-object bin/gstack-autoplan-snapshot.ts)" = 7a0f3344f6a9c7899be6a8394996668a442d6a41
+          git apply --check .context/autoplan-prefix/source-only.patch
+          git apply .context/autoplan-prefix/source-only.patch
+          git diff --check
+          git diff -- bin/gstack-autoplan-snapshot.ts > validation/candidate.patch
+      - name: Install dependencies and browser prerequisites
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils poppler-utils fonts-noto-color-emoji
+      - name: Configure isolated test identity and build required artifacts
+        run: |
+          git config --global user.name 'Fork Validation'
+          git config --global user.email 'fork-validation@gstack.test'
+          git config --global init.defaultBranch main
+          bun run gen:skill-docs --host all
+          bun run vendor:xterm
+          bash browse/scripts/build-node-server.sh
+          bun run build:gates
+          bun run build:cso
+      - name: Run the full free suite without paid evaluations
+        run: |
+          set +e
+          xvfb-run -a bun run test 2>&1 | tee validation/full-free.log
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > validation/full-free-exit.txt
+          exit "$result"
+      - name: Upload full-suite evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: autoplan-prefix-full-free
+          path: validation/
+          if-no-files-found: error
