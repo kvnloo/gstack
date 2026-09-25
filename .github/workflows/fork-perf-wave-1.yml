@@ -1,0 +1,64 @@
+name: Fork activity performance wave 1
+on:
+  push:
+    branches: [investigate/perf-wave-1-20260924]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-gstack-perf-wave-1
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  NO_COLOR: '1'
+  BASE: 730a1017d1a15a8c0c214b820b3865b6e2a32547
+jobs:
+  activity:
+    if: github.repository == 'kvnloo/gstack'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.0
+      - name: Pin and prepare the isolated candidate
+        run: |
+          mkdir -p evidence
+          test "$(git rev-parse HEAD^)" = "$BASE"
+          git rev-parse HEAD > evidence/validation-commit.txt
+          printf '%s\n' "$BASE" > evidence/base-commit.txt
+          test "$(git hash-object browse/src/buffers.ts)" = 27d3796946ef92a32f9d2a188c1653a5f4891648
+          bun install --frozen-lockfile
+          python3 .context/perf-wave-1/prepare.py
+          git diff --check
+          git diff -- browse/src/activity.ts > evidence/candidate.patch
+          git hash-object browse/src/activity.ts > evidence/candidate-blob.txt
+      - name: Prove parity and count avoided copies before benchmarking
+        run: |
+          timeout 180s bun .context/perf-wave-1/probe.mjs 2>&1 | tee evidence/probe.log
+          rm browse/src/.wave1-activity-baseline.ts
+      - name: Native activity tests before and after
+        run: |
+          cp browse/src/activity.ts "$RUNNER_TEMP/activity-candidate.ts"
+          git show "$BASE:browse/src/activity.ts" > browse/src/activity.ts
+          bun test browse/test/activity.test.ts 2>&1 | tee evidence/existing-before.log
+          cp "$RUNNER_TEMP/activity-candidate.ts" browse/src/activity.ts
+          bun test browse/test/activity.test.ts 2>&1 | tee evidence/existing-after.log
+          git diff --check
+      - name: Record boundaries
+        if: always()
+        run: |
+          mkdir -p evidence
+          printf '%s\n' 'Ubuntu 24.04 / Bun 1.4.0.' 'Not browser/server integration, full free suite, native macOS or Windows.' 'Production source is modified only inside this disposable checkout.' 'No upstream issue/PR or production deployment is performed.' > evidence/LIMITATIONS.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: gstack-activity-perf-wave-1
+          path: evidence/
+          if-no-files-found: error
