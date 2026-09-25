@@ -1,0 +1,93 @@
+name: Fork activity acceptance wave 2
+on:
+  push:
+    branches: [investigate/validation-wave-2-20260924]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-gstack-validation-wave-2
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  NO_COLOR: '1'
+  BASE: 730a1017d1a15a8c0c214b820b3865b6e2a32547
+  INPUTS: 5b73551f101d87eef37e03377e688fa575214db7
+  GSTACK_FREE_JOBS: '2'
+  GSTACK_EXPECT_BINARIES: '1'
+jobs:
+  activity-acceptance:
+    if: github.repository == 'kvnloo/gstack'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        variant: [baseline, candidate]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 3
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.0
+      - name: Record the pinned baseline and prepare only the selected variant
+        run: |
+          mkdir -p evidence
+          test "$(git rev-parse HEAD^)" = "$INPUTS"
+          test "$(git hash-object browse/src/activity.ts)" = b15eb45a1d1c2bf5ae57f832418a0d7aa40a0f52
+          test "$(git hash-object browse/src/buffers.ts)" = 27d3796946ef92a32f9d2a188c1653a5f4891648
+          git rev-parse HEAD > evidence/validation-commit.txt
+          printf '%s\n' "$BASE" > evidence/base-commit.txt
+          printf '%s\n' '${{ matrix.variant }}' > evidence/variant.txt
+          bun --version > evidence/bun-version.txt
+          bun install --frozen-lockfile
+          if [[ '${{ matrix.variant }}' == candidate ]]; then
+            python3 .context/perf-wave-1/prepare.py
+            timeout 180s bun .context/perf-wave-1/probe.mjs 2>&1 | tee evidence/parity-and-microbench.log
+            rm browse/src/.wave1-activity-baseline.ts
+          fi
+          git diff --check
+          git diff -- browse/src/activity.ts > evidence/candidate.patch
+          git hash-object browse/src/activity.ts > evidence/tested-source-blob.txt
+      - name: Build the documented full-free prerequisites
+        run: |
+          git config --global user.name 'Fork Validation'
+          git config --global user.email 'fork-validation@gstack.test'
+          git config --global init.defaultBranch main
+          bunx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils poppler-utils fonts-noto-color-emoji
+          bun run gen:skill-docs --host all
+          bun run vendor:xterm
+          bash browse/scripts/build-node-server.sh
+          bun run build:gates
+          bun run build:cso
+      - name: Activity and existing server boundary checks
+        run: |
+          xvfb-run -a bun test browse/test/activity.test.ts browse/test/server-auth.test.ts browse/test/dual-listener.test.ts 2>&1 | tee evidence/adjacent.log
+      - name: Full free suite on the unchanged selected source
+        run: |
+          test "$(git hash-object browse/src/activity.ts)" = "$(cat evidence/tested-source-blob.txt)"
+          set +e
+          timeout 2400s xvfb-run -a bun run test 2>&1 | tee evidence/full-free.log
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > evidence/full-free-exit.txt
+          test "$(git hash-object browse/src/activity.ts)" = "$(cat evidence/tested-source-blob.txt)"
+          exit "$result"
+      - name: Record scope and comparison limits
+        if: always()
+        run: |
+          mkdir -p evidence
+          printf '%s\n' 'Ubuntu 24.04 / Bun 1.4.0 only.' 'Baseline and candidate are separate clean-runner jobs on the same pinned codebase.' 'The production patch, when selected, exists only in this disposable checkout.' 'Existing browser/server acceptance is not a measurement of end-to-end activity-stream latency.' 'No new direct HTTP activity-route test is claimed. Retain every skip and baseline failure.' 'No paid model calls, live user browser, platform matrix or upstream PR publication.' > evidence/LIMITATIONS.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: activity-wave-2-${{ matrix.variant }}
+          path: evidence/
+          if-no-files-found: error
