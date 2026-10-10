@@ -122,6 +122,7 @@ function execution(input: OutsideReviewInput): OutsideReviewClassification['exec
  */
 const SEVERITY_WORDS: Record<string, Severity> = { critical: 'P0', high: 'P1', medium: 'P2', low: 'P3' };
 const WORD = '(critical|high|medium|low)';
+const PRIORITY_LABEL = /^[\t ]*(?:>[\t ]*)?(?:#{1,6}[\t ]+|[-+*][\t ]+|\(?\d{1,3}[.)][\t ]+)?\[?(P[0-3])\]?[\t ]*(?::|\u2014|\u2013|-[\t ])/gim;
 const SEVERITY_LABELS = [
   new RegExp(`\\b(?:severity|priority)\\b[\\t ]*[:=][\\t ]*(?:\\*\\*|__|\\[|\`)*${WORD}\\b`, 'gim'),
   new RegExp(`^[\\t ]*(?:>[\\t ]*)?(?:#{1,6}[\\t ]+|[-+*][\\t ]+|\\(?\\d{1,3}[.)][\\t ]+)?(?:\\*\\*|__)?\\[?${WORD}\\]?(?:\\*\\*|__)?[\\t ]*(?::|\u2014|\u2013|-[\\t ]|\\]|\\(|\\*\\*[\\t ]*(?:\u2014|\u2013|-[\\t ]))`, 'gim'),
@@ -144,6 +145,7 @@ function plainReview(text: string): string {
 export function classifyOutsideReview(input: OutsideReviewInput): OutsideReviewClassification {
   const plain = plainReview(input.text);
   const levels = [...[...plain.matchAll(/\[(P[0-3])\]|^(P[0-3]):/gm)].map(m => (m[1] ?? m[2]) as Severity),
+    ...[...plain.matchAll(PRIORITY_LABEL)].map(m => m[1] as Severity),
     ...(input.gate === 'review' || input.gate === 'structured' ? severityWords(input.text) : [])];
   const findings = { highest: levels.length ? levels.sort()[0]! : null };
   const ran = execution(input);

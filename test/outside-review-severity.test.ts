@@ -23,6 +23,17 @@ const read = (name: string) => fs.readFileSync(fixture(name), 'utf8');
 const REC = 'Recommendation: fix it because the change loses data.';
 
 describe('severity words count as findings in label position', () => {
+  test('execution gates retain P-level findings from numbered bold headings', () => {
+    const text = [
+      'Found six P1/P2 issues.',
+      '1. **P1 — Shell heredocs behind reserved words escape scanning.** `file:546`',
+      '2. **P2 — Expanding heredocs lose the preceding failure context.** `file:562`',
+      'Verdict: not ready (6 P1/P2)',
+    ].join('\n');
+    const result = classifyOutsideReview({ text, gate: 'execution' });
+    expect([result.verdict, result.findings.highest]).toEqual(['findings', 'P1']);
+  });
+
   for (const [name, highest] of [
     ['ceo-codex-shape.txt', 'P1'],
     ['dx-codex-shape.txt', 'P1'],
